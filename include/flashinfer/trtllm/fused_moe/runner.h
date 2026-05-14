@@ -137,15 +137,16 @@ class Runner {
 
   void run(void* routingLogits, void* routingBias, int32_t numTokens, int32_t numExperts,
            int32_t topK, int32_t nGroups, int32_t topkGroups, int32_t localExpertOffset,
-           int32_t localNumExperts, float routedScalingFactor, int32_t* routingExpertIndexes,
+           int32_t localNumExperts, float routedScalingFactor, void* routingExpertIndexes,
            int32_t* expertCountHistogram, int32_t* permutedIdxSize,
            int32_t* expandedIdxToPermutedIdx, int32_t* permutedIdxToExpandedIdx,
            int32_t* permutedIdxToTokenIdx, void* expertWeights, int32_t* numTokensPerExpert,
            int32_t* ctaIdxXyToBatchIdx, int32_t* ctaIdxXyToMnLimit, int32_t* numNonExitingCtas,
            batchedGemm::trtllm::gen::Dtype dtypeElt, batchedGemm::trtllm::gen::Dtype dtypeBias,
-           bool useRoutingScalesOnInput, bool useDeepSeekFp8, RoutingMethodType routingMethodType,
-           cudaStream_t stream, batchedGemm::trtllm::gen::Dtype dtypeLogits,
-           bool normTopkProb = true, int16_t* routing_replay_out = nullptr);
+           batchedGemm::trtllm::gen::Dtype dtypeExpW, bool useRoutingScalesOnInput,
+           bool useDeepSeekFp8, RoutingMethodType routingMethodType, cudaStream_t stream,
+           batchedGemm::trtllm::gen::Dtype dtypeLogits, bool normTopkProb = true,
+           int16_t* routing_replay_out = nullptr);
 
  private:
   friend class MoE::Runner;
@@ -347,7 +348,7 @@ struct MoERunnerArgs {
 
 struct MoEWorkspace {
   // Routing intermediate outputs:
-  int32_t* routing_expert_indexes = nullptr;
+  void* routing_expert_indexes = nullptr;
   int32_t* permuted_idx_size = nullptr;
   int32_t* total_num_padded_tokens = nullptr;  // TODO: duplicate of permuted_idx_size
   int32_t total_max_padded_tokens{0};
@@ -357,7 +358,7 @@ struct MoEWorkspace {
   int32_t* permuted_idx_to_token_idx = nullptr;
 
   // consumed by finalize kernel
-  void* expert_weights = nullptr;  // [num_tokens, top_k] in bfloat16 = mDtypeExpW
+  void* expert_weights = nullptr;  // [num_tokens, top_k] in mDtypeExpW
   // consumed by permuteGemm1 kernel
   void* token_scales = nullptr;
   // consumed by Gemm2 kernel

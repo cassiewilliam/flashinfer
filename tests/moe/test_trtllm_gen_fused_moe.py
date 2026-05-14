@@ -1546,6 +1546,90 @@ class BF16Moe(Moe):
         return {"atol": 0.1, "rtol": 0.85, "percent": 0.925}
 
 
+def test_bf16_moe_fp32_routing_preserves_fp32_expert_weights():
+    """FP32 routing logits should keep FP32 top-k weights through routing/finalize."""
+    compute_capability = get_compute_capability(torch.device(device="cuda"))
+    if compute_capability[0] not in [10]:
+        pytest.skip("These tests are only guaranteed to work on SM100 and SM103 GPUs.")
+
+    torch.manual_seed(0)
+    device = torch.device("cuda:0")
+    num_tokens = 32
+    hidden_size = 512
+    intermediate_size = 512
+    num_experts = 16
+    top_k = 4
+    activation_type = ActivationType.Swiglu.value
+
+    routing_logits = torch.randn(
+        (num_tokens, num_experts), device=device, dtype=torch.float32
+    )
+    hidden_states = torch.randn(
+        (num_tokens, hidden_size), device=device, dtype=torch.bfloat16
+    )
+    gemm1_weights = torch.randn(
+        (num_experts, 2 * intermediate_size, hidden_size),
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    gemm2_weights = torch.randn(
+        (num_experts, hidden_size, intermediate_size),
+        device=device,
+        dtype=torch.bfloat16,
+    )
+
+    bf16_moe = BF16Moe()
+    bf16_moe._cache_permute_indices = {}
+    args = type("Args", (), {})()
+    args.gemm1_weights = gemm1_weights
+    args.gemm2_weights = gemm2_weights
+    args.activation_type = activation_type
+    static_data = bf16_moe.prepare_static_weights_for_kernel(
+        None,
+        args,
+        gemm1_weights,
+        gemm2_weights,
+        hidden_size,
+        intermediate_size,
+        num_experts,
+        {
+            "use_shuffled_weight": True,
+            "layout": WeightLayout.BlockMajorK,
+        },
+    )
+
+    with autotune(False):
+        _, expert_weights, _ = trtllm_bf16_moe(
+            routing_logits=routing_logits,
+            routing_bias=None,
+            hidden_states=hidden_states,
+            gemm1_weights=static_data["gemm1_weights"],
+            gemm2_weights=static_data["gemm2_weights"],
+            num_experts=num_experts,
+            top_k=top_k,
+            n_group=None,
+            topk_group=None,
+            intermediate_size=intermediate_size,
+            local_expert_offset=0,
+            local_num_experts=num_experts,
+            routed_scaling_factor=None,
+            routing_method_type=RoutingMethodType.Renormalize.value,
+            use_shuffled_weight=True,
+            weight_layout=WeightLayout.BlockMajorK.value,
+            do_finalize=False,
+            tune_max_num_tokens=64,
+            activation_type=activation_type,
+        )
+
+    permute_info, scores = routing_reference_renormalize(
+        routing_logits, top_k, num_experts, padding=8
+    )
+    expected = scores.gather(1, permute_info["topKIndices"])
+
+    assert expert_weights.dtype == torch.float32
+    torch.testing.assert_close(expert_weights, expected, atol=1e-5, rtol=1e-5)
+
+
 # ====================================================================================
 # Quantizer Factory
 # ====================================================================================
